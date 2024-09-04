@@ -7,6 +7,9 @@ from langchain.schema import HumanMessage, SystemMessage
 import os
 from dotenv import load_dotenv
 import threading
+import subprocess
+import requests
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -38,7 +41,7 @@ with open('master_prompt.txt', 'r') as file:
 
 def query_llm(prompt, model="openai"):
     if model == "openai":
-        chat = ChatOpenAI(model_name="gpt-4o-mini", streaming=True)
+        chat = ChatOpenAI(model_name="gpt-4o", streaming=True)
     elif model == "anthropic":
         chat = ChatAnthropic(model="claude-2")
     else:
@@ -72,7 +75,7 @@ def get_results():
     with get_db() as conn:
         c = conn.cursor()
         c.execute("SELECT id, timestamp, result_number FROM results ORDER BY id DESC")
-        return [{"id": row[0], "timestamp": row[1], "result_number": row[2]} for row in c.fetchall()]
+        return [{"value": str(row[0]), "label": f"Result {row[2]} - {row[1]}"} for row in c.fetchall()]
 
 def load_result(result_id):
     with get_db() as conn:
@@ -81,24 +84,23 @@ def load_result(result_id):
         row = c.fetchone()
         return {"raw_result": row[0], "analysis": row[1]} if row else None
 
+# ... [rest of the functions remain the same] ...
+
 def interface(request, feedback, model_choice, result_id):
     if request:
-        result = query_llm(request, model_choice)
-        analysis = analyze_result(result)
-        save_result(result, analysis)
-        
-        # Update the results list
+        result, analysis = process_request(request, model_choice)
         results_list = get_results()
-        
-        return result, analysis, results_list, None
+        return result, analysis, gr.Dropdown.update(choices=results_list, value=None)
     elif result_id:
-        result = load_result(result_id)
+        # Extract the actual ID value from the dictionary
+        actual_id = result_id["value"] if isinstance(result_id, dict) else result_id
+        result = load_result(actual_id)
         if result:
-            return result["raw_result"], result["analysis"], gr.update(), gr.update()
+            return result["raw_result"], result["analysis"], gr.update()
         else:
-            return "", "", gr.update(), gr.update()
+            return "", "", gr.update()
     else:
-        return "", "", gr.update(), gr.update()
+        return "", "", gr.update()
 
 # Gradio interface
 with gr.Blocks() as demo:
@@ -122,11 +124,11 @@ with gr.Blocks() as demo:
     
     submit_btn.click(interface, 
                      inputs=[request_input, feedback_input, model_choice, results_dropdown], 
-                     outputs=[result_output, analysis_output, results_dropdown, results_dropdown])
+                     outputs=[result_output, analysis_output, results_dropdown])
     
     results_dropdown.change(interface,
                             inputs=[request_input, feedback_input, model_choice, results_dropdown],
-                            outputs=[result_output, analysis_output, results_dropdown, results_dropdown])
+                            outputs=[result_output, analysis_output, results_dropdown])
 
 if __name__ == "__main__":
     demo.launch()
